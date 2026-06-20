@@ -40612,8 +40612,52 @@ const jules = connect();
 //# sourceMappingURL=index.mjs.map
 
 ;// CONCATENATED MODULE: ./src/prompt.ts
+const LANGUAGE_CHECKLISTS = {
+    'Go': `### Go (Golang) Specific Guidelines
+- **Concurrency & Goroutines**: Check for goroutine leaks, unbuffered channel blocking, race conditions, and lack of synchronization on shared maps.
+- **Error Handling**: Verify that every returned \`error\` is explicitly checked (\`if err != nil\`) and wrapped or returned.
+- **Slice & Memory Safety**: Watch out for out-of-bounds index panics, slice headers memory retention, and unsafe pointer usage.
+- **Defer Statements**: Check for resource cleanups (e.g. \`defer resp.Body.Close()\`) and verify they are not placed inside loops where they will accumulate.`,
+    'Java': `### Java Specific Guidelines
+- **Thread Safety & Lock Management**: Check for synchronization issues, deadlock risks in multi-threading, and correct use of concurrent utilities (e.g., \`ConcurrentHashMap\`).
+- **Null Safety**: Look for potential \`NullPointerException\` occurrences; verify use of \`Optional\` and defensive null checks.
+- **Resource Management**: Ensure resources (files, sockets, database connections) are closed using try-with-resources.
+- **ORM & Database (Spring/JPA/Hibernate)**: Detect N+1 query problems, unsafe SQL/HQL string interpolations (use parameterized queries), and incorrect transaction propagation.`,
+    'JavaScript/TypeScript': `### JavaScript/TypeScript Specific Guidelines
+- **Asynchronous Execution**: Verify that all Promises are properly awaited or handled with \`.catch()\` to prevent unhandled rejections.
+- **Type Safety**: Look for overuse of \`any\`, unsafe type assertions, or missing boundary checks for API payloads.
+- **Security Vents**: Check for Prototype Pollution vectors, unsafe \`eval\`/\`Function\` execution, or injection risks in dynamically evaluated templates.`,
+    'Python': `### Python Specific Guidelines
+- **Resource & Connection Closures**: Verify context managers (\`with\` statements) are used for files and network calls.
+- **Mutable Default Arguments**: Check for mutable defaults (e.g. \`def func(val=[])\`) which persist state across calls.
+- **Type Checking**: If typing annotations are used, check for type consistency and potential runtime errors due to missing type checks.`,
+    'Rust': `### Rust Specific Guidelines
+- **Unsafe Code**: Carefully inspect any \`unsafe\` block. Verify it enforces memory safety constraints and does not cause undefined behavior.
+- **Concurrency**: Verify thread-safety models, ownership constraints, and correct usage of atomic types, \`Mutex\`, and channels.
+- **Panic Control**: Identify code pathways containing \`unwrap()\`, \`expect()\`, or indexing that could result in runtime panics. Recommend safer alternatives like pattern matching or \`get()\`.`
+};
+function detectLanguages(diff) {
+    const languages = [];
+    if (/\b(?:diff --git a\/.*\.go\b)/i.test(diff))
+        languages.push('Go');
+    if (/\b(?:diff --git a\/.*\.java\b)/i.test(diff))
+        languages.push('Java');
+    if (/\b(?:diff --git a\/.*\.(js|ts|jsx|tsx)\b)/i.test(diff))
+        languages.push('JavaScript/TypeScript');
+    if (/\b(?:diff --git a\/.*\.py\b)/i.test(diff))
+        languages.push('Python');
+    if (/\b(?:diff --git a\/.*\.rs\b)/i.test(diff))
+        languages.push('Rust');
+    return languages;
+}
 function buildReviewPrompt(args) {
     const { repoFullName, prNumber, prTitle, prBody, baseBranch, headBranch, diff, diffTruncatedNote, extraInstructions, rulesFromFile, } = args;
+    const detectedLangs = detectLanguages(diff);
+    let languagePromptSection = '';
+    if (detectedLangs.length > 0) {
+        languagePromptSection = `\n# LANGUAGE-SPECIFIC CHECKLISTS (Targeted checks for detected files)\n` +
+            detectedLangs.map(lang => LANGUAGE_CHECKLISTS[lang]).join('\n\n') + '\n';
+    }
     return `You are an elite, battle-hardened Principal Security Engineer and Senior Software Architect. Your mission is to perform a deep, hyper-critical review of the pull request below.
 
 # SECURITY — READ FIRST
@@ -40646,7 +40690,7 @@ ${extraInstructions}
 Perform a comprehensive, dual-aspect analysis:
 1. **Deep Security Review**: Scan for vulnerabilities, logical flaws, security misconfigurations, and cryptographic weaknesses.
 2. **Architectural & Code Quality Review**: Scan for correctness issues, race conditions, memory leaks, performance bottlenecks, and compliance with software design principles.
-
+${languagePromptSection}
 ---
 
 # ANALYSIS FRAMEWORK (Be extremely pedantic)
