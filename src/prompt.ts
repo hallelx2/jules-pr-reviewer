@@ -88,12 +88,25 @@ Respond in Markdown:
 ## Summary
 One short paragraph stating what the PR does and your overall take.
 
+## Sequence Diagrams
+If the PR introduces complex multi-component/file control flows, API interaction changes, or non-trivial state changes, generate a Mermaid.js sequence diagram to visualize the flow. Wrap the diagram in a \`\`\`mermaid block. If the changes are simple or don't involve complex flows, omit this section entirely.
+
 ## Strengths
 1-3 bullets on what's well done (if anything genuinely is). Skip this section if nothing notable.
 
 ## Findings
-Group by severity heading (### [BLOCKING], ### [WARN], ### [NIT]). For each finding:
-- **\`path/to/file.ext\`, line N** (or line range): one-sentence issue, then why it matters, then how to fix.
+Group by severity heading (### [BLOCKING], ### [WARN], ### [NIT]).
+For each finding, you MUST use the following exact list format:
+
+- **\`<file_path>\`, line <line_number>** (or range e.g. line 12-15):
+  - **Issue**: <one-sentence description of the issue>
+  - **Impact**: <why this matters / potential consequences>
+  - **Fix**: <remediation steps>
+  - **Agent Prompt to Fix**:
+    \`\`\`
+    <clear, detailed instructions for a coding AI agent to automatically fix this finding. Make it ready to be passed directly to a tool like Jules CLI.>
+    \`\`\`
+
 Omit any severity section that has zero findings.
 
 ## Verdict

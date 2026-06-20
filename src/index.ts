@@ -145,7 +145,75 @@ async function run(): Promise<void> {
 
     const finalBody =
       `${COMMENT_MARKER}\n## 🤖 Jules Review\n\n${reviewMessage}\n\n---\n_Session: \`${session.id}\`_`;
+    
+    // First, update the general issue comment
     await octokit.rest.issues.updateComment({ owner, repo, comment_id: commentId, body: finalBody });
+
+    // Parse the findings into inline comments
+    const parsedFindings = parseFindings(reviewMessage);
+    const inlineComments = parsedFindings.map(f => ({
+      path: f.path,
+      line: f.line,
+      body: f.body,
+    }));
+
+    const reviewEvent = verdict === 'block' ? 'REQUEST_CHANGES' : (verdict === 'approve' ? 'APPROVE' : 'COMMENT');
+
+    try {
+      if (inlineComments.length > 0) {
+        core.info(`Submitting PR review with ${inlineComments.length} inline comments...`);
+        await octokit.rest.pulls.createReview({
+          owner,
+          repo,
+          pull_number: prNumber,
+          commit_id: headSha,
+          event: reviewEvent as any,
+          body: `🤖 **Jules PR Review Completed**\n\nVerdict: \`${verdict}\`. Detailed findings have been posted inline on the relevant lines of code.`,
+          comments: inlineComments,
+        });
+      } else {
+        core.info('Submitting PR review with no inline comments...');
+        await octokit.rest.pulls.createReview({
+          owner,
+          repo,
+          pull_number: prNumber,
+          commit_id: headSha,
+          event: reviewEvent as any,
+          body: `🤖 **Jules PR Review Completed**\n\nVerdict: \`${verdict}\`. No inline findings to report.`,
+        });
+      }
+    } catch (reviewErr) {
+      core.warning(`Bulk review submission failed: ${String(reviewErr)}. Falling back to submitting summary review and posting comments individually.`);
+      
+      try {
+        await octokit.rest.pulls.createReview({
+          owner,
+          repo,
+          pull_number: prNumber,
+          commit_id: headSha,
+          event: reviewEvent as any,
+          body: `🤖 **Jules PR Review Completed**\n\nVerdict: \`${verdict}\`. Detailed findings are being posted individually.`,
+        });
+
+        for (const comment of inlineComments) {
+          try {
+            await octokit.rest.pulls.createReviewComment({
+              owner,
+              repo,
+              pull_number: prNumber,
+              commit_id: headSha,
+              path: comment.path,
+              line: comment.line,
+              body: comment.body,
+            });
+          } catch (commentErr) {
+            core.warning(`Could not post inline comment on ${comment.path}:${comment.line} - ${String(commentErr)}`);
+          }
+        }
+      } catch (fallbackErr) {
+        core.error(`Fallback review submission also failed: ${String(fallbackErr)}`);
+      }
+    }
 
     const { state, description } = statusFromVerdict(verdict, failOn);
     await setStatus(octokit, owner, repo, headSha, statusContext, state, description);
@@ -341,6 +409,73 @@ function statusFromVerdict(
   return verdict === 'block'
     ? { state: 'failure', description: 'Blocking issues found' }
     : { state: 'success', description: `Review complete (verdict: ${verdict})` };
+}
+
+interface ParsedFinding {
+  path: string;
+  line: number;
+  severity: string;
+  body: string;
+}
+
+function parseFindings(reviewMessage: string): ParsedFinding[] {
+  const findings: ParsedFinding[] = [];
+  
+  // Match lines like: - **`src/db.js`, line 4** or - **`src/server.js`, lines 12-14**
+  const findingHeaderRegex = /^-\s+\*\*`([^`]+)`,\s*lines?\s*(\d+)(?:[-–\s\d]+)?\*\*/gm;
+  
+  const matches: { index: number; path: string; line: number; fullHeader: string }[] = [];
+  let match;
+  while ((match = findingHeaderRegex.exec(reviewMessage)) !== null) {
+    matches.push({
+      index: match.index,
+      path: match[1],
+      line: parseInt(match[2], 10),
+      fullHeader: match[0]
+    });
+  }
+  
+  for (let i = 0; i < matches.length; i++) {
+    const current = matches[i];
+    const nextIndex = (i + 1 < matches.length) ? matches[i + 1].index : reviewMessage.length;
+    
+    let body = reviewMessage.slice(current.index + current.fullHeader.length, nextIndex).trim();
+    
+    const verdictIndex = body.indexOf('## Verdict');
+    if (verdictIndex !== -1) {
+      body = body.slice(0, verdictIndex).trim();
+    }
+    const verdictLineIndex = body.indexOf('VERDICT:');
+    if (verdictLineIndex !== -1) {
+      body = body.slice(0, verdictLineIndex).trim();
+    }
+    
+    if (body.startsWith(':')) {
+      body = body.slice(1).trim();
+    }
+    
+    let severity = 'COMMENT';
+    const textBefore = reviewMessage.slice(0, current.index);
+    const lastBlocking = textBefore.lastIndexOf('### [BLOCKING]');
+    const lastWarn = textBefore.lastIndexOf('### [WARN]');
+    const lastNit = textBefore.lastIndexOf('### [NIT]');
+    
+    const maxIdx = Math.max(lastBlocking, lastWarn, lastNit);
+    if (maxIdx !== -1) {
+      if (maxIdx === lastBlocking) severity = 'BLOCKING';
+      else if (maxIdx === lastWarn) severity = 'WARN';
+      else if (maxIdx === lastNit) severity = 'NIT';
+    }
+    
+    findings.push({
+      path: current.path,
+      line: current.line,
+      severity,
+      body: `### 🤖 Jules Review [${severity}]\n\n${body}`
+    });
+  }
+  
+  return findings;
 }
 
 run().catch(err => {
